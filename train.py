@@ -1,10 +1,7 @@
-from cnn_models import VGG16, MNISTCNN
 import torch
-import torch.nn as nn
-import torch.optim as optim
-from datasets import get_mnist_dataloader, get_cifar10_dataloader
 from tqdm import tqdm
-import argparse
+from adversarial_attack import fgsm_targeted, fgsm_untargeted, pgd_targeted, pgd_untargeted
+from visualizing import visualize_adversarial_samples
 
 
 def train(model, dataloader, criterion, optimizer, device):
@@ -20,51 +17,121 @@ def train(model, dataloader, criterion, optimizer, device):
         total_loss += loss.item()
     return total_loss / len(dataloader)
 
-def evaluate(model, dataloader, criterion, device):
+def evaluate(model, dataloader, criterion, device, use_attack=True, attack_eps=0.3, class_names=None):
     model.eval()
     total_loss = 0
     correct = 0
-    with torch.no_grad():
-        for inputs, labels in tqdm(dataloader, desc="Evaluating"):
-            inputs, labels = inputs.to(device), labels.to(device)
+    
+    total_attack_samples = 0
+    fgsm_u_success = 0
+    fgsm_t_success = 0
+    pgd_u_success = 0
+    pgd_t_success = 0
+
+    # for visualization of adversarial samples (store first batch only)
+    vis_data = {'fgsm_u': [], 'fgsm_t': [], 'pgd_u': [], 'pgd_t': []}
+    # Iterate over the dataset
+    for inputs, labels in tqdm(dataloader, desc="Evaluating"):
+        inputs, labels = inputs.to(device), labels.to(device)
+        
+        # Clean evaluation
+        with torch.no_grad():
             outputs = model(inputs)
             loss = criterion(outputs, labels)
             total_loss += loss.item()
             _, predicted = torch.max(outputs.data, 1)
             correct += (predicted == labels).sum().item()
+        
+        if use_attack:
+            # Generate attacks
+            fgsm_u_img, fgsm_t_img, pgd_u_img, pgd_t_img = attack(model, inputs, labels, device, eps=attack_eps)
+            
+            # Evaluate attacks
+            with torch.no_grad():
+                # Helper to calculate success
+                def process_attack(adv_imgs, attack_name, targeted=False):
+                    _, adv_preds = torch.max(model(adv_imgs).data, 1)
+                    orig_correct = (predicted == labels)
+                    
+                    target_labels = (labels + 1) % 10
+                    
+                    if targeted:
+                        success_mask = orig_correct & (adv_preds == target_labels)
+                    else:
+                        success_mask = orig_correct & (adv_preds != labels)
+
+                    success_count = success_mask.sum().item()
+                    
+                    if len(vis_data[attack_name]) < 5:
+                        success_indices = torch.where(success_mask)[0]
+                        for idx in success_indices:
+                            if len(vis_data[attack_name]) < 5:
+                                vis_data[attack_name].append({
+                                    'orig_img': inputs[idx].cpu(),
+                                    'adv_img': adv_imgs[idx].cpu(),
+                                    'label': labels[idx].cpu(),
+                                    'adv_pred': adv_preds[idx].cpu()
+                                })
+                                
+                    return success_count
+                
+                fgsm_u_success += process_attack(fgsm_u_img, 'fgsm_u', targeted=False)
+                fgsm_t_success += process_attack(fgsm_t_img, 'fgsm_t', targeted=True)
+                pgd_u_success += process_attack(pgd_u_img, 'pgd_u', targeted=False)
+                pgd_t_success += process_attack(pgd_t_img, 'pgd_t', targeted=True)
+                
+            total_attack_samples += inputs.size(0)
+            
+    if use_attack:
+        attack_types = [
+            ('fgsm_u', 'fgsm_untargeted_vis.png'),
+            ('fgsm_t', 'fgsm_targeted_vis.png'),
+            ('pgd_u', 'pgd_untargeted_vis.png'),
+            ('pgd_t', 'pgd_targeted_vis.png')
+        ]
+    
+        for atk_name, filename in attack_types:
+            samples = vis_data[atk_name]
+            if len(samples) > 0:
+                # Stack the collected tensors into a single batch
+                orig_imgs_batch = torch.stack([s['orig_img'] for s in samples])
+                adv_imgs_batch = torch.stack([s['adv_img'] for s in samples])
+                labels_batch = torch.stack([s['label'] for s in samples])
+                preds_batch = torch.stack([s['adv_pred'] for s in samples])
+                
+                # Call the visualization function
+                visualize_adversarial_samples(
+                    orig_imgs_batch, adv_imgs_batch, labels_batch, preds_batch, 
+                    class_names=class_names, num_samples=len(samples), filename=filename
+                )
+
     accuracy = correct / len(dataloader.dataset)
+    
+    if use_attack and total_attack_samples > 0:
+        # Change the denominator of ASR to 'total number of correct predictions (correct)' to improve accuracy
+        print(f"\nModel Clean Accuracy: {accuracy:.4f} ({correct}/{len(dataloader.dataset)})")
+        print(f"Attack Success Rate (ASR) over {correct} correctly classified samples:")
+        print(f"FGSM Untargeted: {fgsm_u_success/correct:.4f}")
+        print(f"FGSM Targeted:   {fgsm_t_success/correct:.4f}")
+        print(f"PGD Untargeted:  {pgd_u_success/correct:.4f}")
+        print(f"PGD Targeted:    {pgd_t_success/correct:.4f}")
+
     return total_loss / len(dataloader), accuracy
 
-def main(args):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f'Using device: {device}')
-    
-    print(f'Loading {args.dataset} dataset...')
-    
-    # Load data
-    if args.dataset == 'MNIST':
-        train_loader = get_mnist_dataloader(root='./data', batch_size=64, train=True)
-        test_loader = get_mnist_dataloader(root='./data', batch_size=64, train=False)
-        model = MNISTCNN(input_channels=1, num_classes=10).to(device)
-    else:
-        train_loader = get_cifar10_dataloader(root='./data', batch_size=64, train=True)
-        test_loader = get_cifar10_dataloader(root='./data', batch_size=64, train=False)
-        model = VGG16(input_channels=3, num_classes=10).to(device)
-
-    # Initialize model, criterion, and optimizer
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
-    
-    # Train the model
-    num_epochs = 50
-    for epoch in range(num_epochs):
-        train_loss = train(model, train_loader, criterion, optimizer, device)
-        test_loss, test_accuracy = evaluate(model, test_loader, criterion, device)
-        print(f'Epoch {epoch+1}/{num_epochs}, Train Loss: {train_loss:.4f}, Test Loss: {test_loss:.4f}, Test Accuracy: {test_accuracy:.4f}')
-        
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset', type=str, default='MNIST', choices=['MNIST', 'CIFAR10'])
-    args = parser.parse_args()
-    
-    main(args)
+def attack(model, inputs, labels, device, eps=0.3):
+    with torch.enable_grad():
+        fgsm_untargeted_image = fgsm_untargeted(model, 
+                                    inputs.clone().detach().to(device), 
+                                    labels.to(device), eps=eps)
+        fgsm_targeted_image = fgsm_targeted(model, 
+                        inputs.clone().detach().to(device), 
+                        ((labels+1)%10).to(device), eps=eps)
+        pgd_untargeted_image = pgd_untargeted(model,
+                    inputs.clone().detach().to(device), 
+                    labels.to(device), 
+                    k=40, eps=eps, eps_step=0.01)
+        pgd_targeted_image = pgd_targeted(model,
+                    inputs.clone().detach().to(device),
+                    ((labels+1)%10).to(device), 
+                    k=40, eps=eps, eps_step=0.01)
+    return fgsm_untargeted_image, fgsm_targeted_image, pgd_untargeted_image, pgd_targeted_image
