@@ -96,14 +96,14 @@ class ResNet18(ResNet):
     def __init__(self, num_classes=10):
         super(ResNet18, self).__init__(BasicBlock, [2, 2, 2, 2], num_classes)
 
-class VGG16(nn.Module):
-    def __init__(self, input_channels=3, num_classes=10):
-        super(VGG16, self).__init__()
-        self.features = models.vgg16(weights='DEFAULT')
-        if input_channels != 3:
-            self.features.features[0] = nn.Conv2d(input_channels, 64, kernel_size=3, stride=1, padding=1)
-        in_features = self.features.classifier[6].in_features
-        self.features.classifier[6] = nn.Linear(in_features, num_classes)
+# class VGG16(nn.Module):
+#     def __init__(self, input_channels=3, num_classes=10):
+#         super(VGG16, self).__init__()
+#         self.features = models.vgg16(weights='DEFAULT')
+#         if input_channels != 3:
+#             self.features.features[0] = nn.Conv2d(input_channels, 64, kernel_size=3, stride=1, padding=1)
+#         in_features = self.features.classifier[6].in_features
+#         self.features.classifier[6] = nn.Linear(in_features, num_classes)
 
-    def forward(self, x):
-        return self.features(x)
+#     def forward(self, x):
+#         return self.features(x)
