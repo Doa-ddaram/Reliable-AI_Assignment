@@ -55,7 +55,7 @@ def main(args):
     optimizer = optim.AdamW(model.parameters(), lr=0.01)
     
     if args.use_attack:
-        csv_filename = f"results/attack_{args.dataset.lower()}_eps_{args.attack_eps}.csv"
+        csv_filename = f"attack_{args.dataset.lower()}_eps_{args.attack_eps}.csv"
         csv_filepath = init_csv(csv_filename)
     
     # Train the model
