@@ -1,6 +1,6 @@
 # Reliable AI: Adversarial Attack Robustness
 
-이 저장소는 MNIST와 CIFAR-10 데이터셋을 사용하여 CNN 모델을 학습하고, 다양한 적대적 공격(Adversarial Attacks)에 대한 모델의 강건성(Robustness)을 평가하는 프로젝트입니다.
+이 저장소는 MNIST와 CIFAR-10 데이터셋을 사용하여 CNN 모델을 학습하고, 다양한 적대적 공격(Adversarial Attacks)에 대한 공격 성공률을 확인하는 프로젝트입니다.
 
 ## 📋 Requirements
 
@@ -15,6 +15,14 @@ pip install -r requirements.txt
 - torchvision
 - tqdm
 - argparse
+
+## 🏃 QuickStart
+
+`run.sh` 스크립트를 사용하여 CIFAR10과 MNIST 데이터셋에서의 여러 공격 강도(epsilon: 0.05, 0.1, 0.2, 0.3)에 대한 평가를 한 번에 실행할 수 있습니다.
+
+```bash
+bash run.sh
+```
 
 ## 🚀 Usage
 
@@ -58,5 +66,13 @@ python test.py --dataset CIFAR10 --use_attack --attack_eps 0.1
 
 ## 📊 Outputs
 
-- 터미널에는 각 공격에 대한 성공 여부(`Success Count`)가 출력됩니다.
-- 시각화 결과는 `*_vis.png` 파일로 저장됩니다 (예: `fgsm_untargeted_vis.png`).
+- 터미널에는 정답을 맞춘 이미지들을 기준으로 **공격 성공률(Attack Success Rate, ASR)** 이 디테일하게 출력됩니다.
+- 평가 결과(Epoch, Clean Accuracy, 각 공격별 ASR 등)는 `results/` 폴더 내에 CSV 파일(`attack_{dataset}_eps_{eps}.csv`)로 자동 저장되어 실험 결과를 편하게 분석할 수 있습니다.
+- 시각화 결과는 마지막 에포크에 `*_vis.png` 파일로 저장됩니다 (예: `fgsm_untargeted_vis.png`).
+
+## ⚙️ Advanced Arguments
+
+`test.py` 스크립트는 정확한 실험 설정을 위해 다음과 같은 주요 인자들도 제공합니다:
+- `--eval_interval`: 공격 성능 평가를 수행할 에포크 주기를 설정합니다. (기본값: 3)
+- `--seed`: 실험 재현성을 위한 Random Seed (기본값: 42)
+- `--pgd_steps`: PGD 공격의 모델 업데이트 반복 횟수 (기본값: 30)
