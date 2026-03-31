@@ -17,7 +17,43 @@ def train(model, dataloader, criterion, optimizer, device):
         total_loss += loss.item()
     return total_loss / len(dataloader)
 
-def evaluate(model, dataloader, criterion, device, use_attack=True, attack_eps=0.3, class_names=None):
+def process_attack(model, adv_imgs, attack_name, targeted, predicted, labels, inputs, vis_data):
+    _, adv_preds = torch.max(model(adv_imgs).data, 1)
+    orig_correct = (predicted == labels)
+    
+    target_labels = (labels + 1) % 10
+    
+    if targeted:
+        success_mask = orig_correct & (adv_preds == target_labels)
+    else:
+        success_mask = orig_correct & (adv_preds != labels)
+
+    success_count = success_mask.sum().item()
+    
+    if len(vis_data[attack_name]) < 5:
+        success_indices = torch.where(success_mask)[0]
+        for idx in success_indices:
+            if len(vis_data[attack_name]) < 5:
+                vis_data[attack_name].append({
+                    'orig_img': inputs[idx].cpu(),
+                    'adv_img': adv_imgs[idx].cpu(),
+                    'label': labels[idx].cpu(),
+                    'adv_pred': adv_preds[idx].cpu()
+                })
+                
+    return success_count
+
+def evaluate(
+    model,
+    dataloader,
+    criterion,
+    device,
+    use_attack=True,
+    attack_eps=0.3,
+    class_names=None,
+    return_attack_metrics=False,
+    save_visuals=True,
+):
     model.eval()
     total_loss = 0
     correct = 0
@@ -48,41 +84,15 @@ def evaluate(model, dataloader, criterion, device, use_attack=True, attack_eps=0
             
             # Evaluate attacks
             with torch.no_grad():
-                # Helper to calculate success
-                def process_attack(adv_imgs, attack_name, targeted=False):
-                    _, adv_preds = torch.max(model(adv_imgs).data, 1)
-                    orig_correct = (predicted == labels)
-                    
-                    target_labels = (labels + 1) % 10
-                    
-                    if targeted:
-                        success_mask = orig_correct & (adv_preds == target_labels)
-                    else:
-                        success_mask = orig_correct & (adv_preds != labels)
-
-                    success_count = success_mask.sum().item()
-                    
-                    if len(vis_data[attack_name]) < 5:
-                        success_indices = torch.where(success_mask)[0]
-                        for idx in success_indices:
-                            if len(vis_data[attack_name]) < 5:
-                                vis_data[attack_name].append({
-                                    'orig_img': inputs[idx].cpu(),
-                                    'adv_img': adv_imgs[idx].cpu(),
-                                    'label': labels[idx].cpu(),
-                                    'adv_pred': adv_preds[idx].cpu()
-                                })
-                                
-                    return success_count
                 
-                fgsm_u_success += process_attack(fgsm_u_img, 'fgsm_u', targeted=False)
-                fgsm_t_success += process_attack(fgsm_t_img, 'fgsm_t', targeted=True)
-                pgd_u_success += process_attack(pgd_u_img, 'pgd_u', targeted=False)
-                pgd_t_success += process_attack(pgd_t_img, 'pgd_t', targeted=True)
+                fgsm_u_success += process_attack(model, fgsm_u_img, 'fgsm_u', False, predicted, labels, inputs, vis_data)
+                fgsm_t_success += process_attack(model, fgsm_t_img, 'fgsm_t', True, predicted, labels, inputs, vis_data)
+                pgd_u_success += process_attack(model, pgd_u_img, 'pgd_u', False, predicted, labels, inputs, vis_data)
+                pgd_t_success += process_attack(model, pgd_t_img, 'pgd_t', True, predicted, labels, inputs, vis_data)
                 
             total_attack_samples += inputs.size(0)
             
-    if use_attack:
+    if use_attack and save_visuals:
         attack_types = [
             ('fgsm_u', 'fgsm_untargeted_vis.png'),
             ('fgsm_t', 'fgsm_targeted_vis.png'),
@@ -107,15 +117,43 @@ def evaluate(model, dataloader, criterion, device, use_attack=True, attack_eps=0
 
     accuracy = correct / len(dataloader.dataset)
     
+    attack_metrics = None
     if use_attack and total_attack_samples > 0:
         # Change the denominator of ASR to 'total number of correct predictions (correct)' to improve accuracy
+        asr_denom = max(correct, 1)
+        fgsm_u_asr = fgsm_u_success / asr_denom
+        fgsm_t_asr = fgsm_t_success / asr_denom
+        pgd_u_asr = pgd_u_success / asr_denom
+        pgd_t_asr = pgd_t_success / asr_denom
+
+        attack_metrics = {
+            'eps': attack_eps,
+            'clean_accuracy': accuracy,
+            'clean_correct': correct,
+            'total_samples': len(dataloader.dataset),
+            'asr': {
+                'fgsm_untargeted': fgsm_u_asr,
+                'fgsm_targeted': fgsm_t_asr,
+                'pgd_untargeted': pgd_u_asr,
+                'pgd_targeted': pgd_t_asr,
+            },
+            'success_count': {
+                'fgsm_untargeted': fgsm_u_success,
+                'fgsm_targeted': fgsm_t_success,
+                'pgd_untargeted': pgd_u_success,
+                'pgd_targeted': pgd_t_success,
+            },
+        }
+
         print(f"\nModel Clean Accuracy: {accuracy:.4f} ({correct}/{len(dataloader.dataset)})")
         print(f"Attack Success Rate (ASR) over {correct} correctly classified samples:")
-        print(f"FGSM Untargeted: {fgsm_u_success/correct:.4f}")
-        print(f"FGSM Targeted:   {fgsm_t_success/correct:.4f}")
-        print(f"PGD Untargeted:  {pgd_u_success/correct:.4f}")
-        print(f"PGD Targeted:    {pgd_t_success/correct:.4f}")
+        print(f"FGSM Untargeted: {fgsm_u_asr:.4f}")
+        print(f"FGSM Targeted:   {fgsm_t_asr:.4f}")
+        print(f"PGD Untargeted:  {pgd_u_asr:.4f}")
+        print(f"PGD Targeted:    {pgd_t_asr:.4f}")
 
+    if return_attack_metrics:
+        return total_loss / len(dataloader), accuracy, attack_metrics
     return total_loss / len(dataloader), accuracy
 
 def attack(model, inputs, labels, device, eps=0.3):
