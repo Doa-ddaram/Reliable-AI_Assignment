@@ -65,7 +65,7 @@ def pgd_targeted(model, x, target, k, eps, eps_step):
     # Initialize adversarial example as the original input
     x_adv = x.clone().detach()
     
-    for i in range(k):
+    for _ in range(k):
         x_adv = x_adv.detach() # Detach from previous graph to prevent gradient accumulation
         x_adv.requires_grad = True
 
@@ -101,7 +101,7 @@ def pgd_untargeted(model, x, true_label, k, eps, eps_step):
     # Initialize adversarial example as the original input
     x_adv = x.clone().detach()
     
-    for i in range(k):
+    for _ in range(k):
         
         x_adv.requires_grad = True
         model.zero_grad()  # Zero all existing gradients
